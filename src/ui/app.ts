@@ -120,8 +120,6 @@ export class AppUI {
   private startRace() {
     if (!this.ready) return;
 
-    this.trackStart();
-
     if ($<HTMLInputElement>('#chkGroupMode').checked) {
       const problem = this.applyGroupPlan();
       if (problem) {
@@ -184,25 +182,6 @@ export class AppUI {
 
     this.roulette.setMarbleEntries(entries, assignment.slotOf, seed);
     return null;
-  }
-
-  private trackStart() {
-    const gtag = (window as any).gtag;
-    if (typeof gtag === 'function') {
-      gtag('event', 'start', {
-        event_category: 'roulette',
-        event_label: 'start',
-        value: this.roulette.getCount(),
-      });
-    }
-
-    const umami = (window as any).umami;
-    if (typeof umami !== 'undefined') {
-      umami.track('start', { count: this.roulette.getCount() });
-      expandNames(this.getNames()).forEach((entry) => {
-        umami.track('marble', { name: entry.name, count: 1 });
-      });
-    }
   }
 
   // ─── options ──────────────────────────────────────────────────────────────
