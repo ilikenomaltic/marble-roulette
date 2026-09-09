@@ -1,11 +1,8 @@
 import './localization';
 import options from './options';
-import { registerServiceWorker } from './registerServiceWorker';
 import { Roulette } from './roulette';
 import { RaceSimulator } from './simulation';
 import { AppUI } from './ui/app';
-
-registerServiceWorker();
 
 const roulette = new Roulette();
 const simulator = new RaceSimulator();
