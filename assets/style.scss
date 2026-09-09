@@ -627,6 +627,8 @@ div.toast {
     padding: 24px;
     width: 420px;
     max-width: 92vw;
+    max-height: 88vh;
+    overflow-y: auto;
     color: #eee;
 
     h3 { margin: 0 0 6px; font-size: 1rem; }
@@ -655,10 +657,34 @@ div.toast {
       .vs { color: #aaa; font-size: 0.9rem; flex-shrink: 0; }
     }
 
+    .teacher-divider {
+      border: none;
+      border-top: 1px solid #555;
+      margin: 18px 0 16px;
+    }
+
+    // Per-section clear button; the shared footer only holds Save now.
+    .teacher-actions-row {
+      display: flex;
+      justify-content: flex-end;
+
+      button {
+        padding: 6px 14px;
+        border-radius: 7px;
+        border: none;
+        font-size: 0.78rem;
+        cursor: pointer;
+        background: #555;
+        color: #ccc;
+
+        &:hover { background: #616172; }
+      }
+    }
+
     .conflict-list {
-      max-height: 180px;
+      max-height: 130px;
       overflow-y: auto;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
       display: flex;
       flex-direction: column;
       gap: 5px;
@@ -697,8 +723,9 @@ div.toast {
 
     .teacher-footer {
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
+      margin-top: 18px;
 
       button {
         padding: 7px 16px;

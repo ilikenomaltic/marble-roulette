@@ -3,6 +3,8 @@ import type { MapEntityState } from './types/MapEntity.type';
 
 export interface IPhysics {
   init(): Promise<void>;
+  /** Fixes every physics-affecting random draw, keyed by marble slot id. */
+  setSeed(seed: number): void;
   clear(): void;
   clearMarbles(): void;
   createStage(stage: StageDef): void;

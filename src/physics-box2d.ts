@@ -2,6 +2,10 @@ import Box2DFactory from 'box2d-wasm';
 import type { StageDef } from './data/maps';
 import type { IPhysics } from './IPhysics';
 import type { MapEntity, MapEntityState } from './types/MapEntity.type';
+import { createSlotRng, hashRandom, type Rng } from './utils/rng';
+
+/** Keeps the shake stream from colliding with other per-slot streams. */
+const SHAKE_STREAM_SALT = 0x5ba4e17c;
 
 export class Box2dPhysics implements IPhysics {
   private Box2D!: typeof Box2D & EmscriptenModule;
@@ -13,15 +17,39 @@ export class Box2dPhysics implements IPhysics {
 
   private deleteCandidates: Box2D.b2Body[] = [];
 
+  private seed: number = 0;
+  /** One independent stream per marble, so shake order cannot couple marbles. */
+  private shakeRngs: { [id: number]: Rng } = {};
+
   async init(): Promise<void> {
     this.Box2D = await Box2DFactory();
-    this.gravity = new this.Box2D.b2Vec2(0, 10);
-    this.world = new this.Box2D.b2World(this.gravity);
+    this.createWorld();
     console.log('box2d ready');
   }
 
+  /**
+   * Builds a brand-new world.
+   *
+   * Reusing a world across races is not deterministic: Box2D recycles broadphase
+   * proxy ids and allocator blocks, so an identical line-up ends up with a
+   * different contact ordering and the solver produces slightly different
+   * numbers, which chaos then amplifies into a completely different result. A
+   * fresh world starts every id sequence from zero again.
+   */
+  private createWorld(): void {
+    if (this.world) {
+      this.Box2D.destroy(this.world);
+    }
+    this.gravity = new this.Box2D.b2Vec2(0, 10);
+    this.world = new this.Box2D.b2World(this.gravity);
+    this.marbleMap = {};
+    this.entities = [];
+    this.deleteCandidates = [];
+    this.shakeRngs = {};
+  }
+
   clear(): void {
-    this.clearEntities();
+    this.createWorld();
   }
 
   clearMarbles(): void {
@@ -100,6 +128,11 @@ export class Box2dPhysics implements IPhysics {
     this.entities = [];
   }
 
+  setSeed(seed: number): void {
+    this.seed = seed;
+    this.shakeRngs = {};
+  }
+
   createMarble(id: number, x: number, y: number): void {
     const circleShape = new this.Box2D.b2CircleShape();
     circleShape.set_m_radius(0.25);
@@ -109,16 +142,20 @@ export class Box2dPhysics implements IPhysics {
     bodyDef.set_position(new this.Box2D.b2Vec2(x, y));
 
     const body = this.world.CreateBody(bodyDef);
-    body.CreateFixture(circleShape, 1 + Math.random());
+    // Density is keyed by slot id, not by creation order, so that assigning a
+    // different name to this slot cannot change the marble's mass.
+    body.CreateFixture(circleShape, 1 + hashRandom(this.seed, id));
     body.SetAwake(false);
     body.SetEnabled(false);
     this.marbleMap[id] = body;
+    this.shakeRngs[id] = createSlotRng(this.seed ^ SHAKE_STREAM_SALT, id);
   }
 
   shakeMarble(id: number): void {
     const body = this.marbleMap[id];
     if (body) {
-      body.ApplyLinearImpulseToCenter(new this.Box2D.b2Vec2(Math.random() * 10 - 5, Math.random() * 10 - 5), true);
+      const rng = this.shakeRngs[id];
+      body.ApplyLinearImpulseToCenter(new this.Box2D.b2Vec2(rng() * 10 - 5, rng() * 10 - 5), true);
     }
   }
 

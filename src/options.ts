@@ -2,6 +2,7 @@ class Options {
   useSkills: boolean = true;
   winningRank: number = 0;
   autoRecording: boolean = true;
+  darkMode: boolean = true;
 }
 
 const options = new Options();

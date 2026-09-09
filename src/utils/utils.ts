@@ -1,3 +1,5 @@
+import type { Rng } from './rng';
+
 export function rad(degree: number) {
   return (Math.PI * degree) / 180;
 }
@@ -27,7 +29,7 @@ export function pad(v: number) {
   return v.toString().padStart(2, '0');
 }
 
-export function shuffle<T>(originalArray: T[]): T[] {
+export function shuffle<T>(originalArray: T[], rng: Rng = Math.random): T[] {
   const array = originalArray.slice();
   let currentIndex = array.length;
   let randomIndex;
@@ -35,7 +37,7 @@ export function shuffle<T>(originalArray: T[]): T[] {
   // While there remain elements to shuffle.
   while (currentIndex !== 0) {
     // Pick a remaining element.
-    randomIndex = Math.floor(Math.random() * currentIndex);
+    randomIndex = Math.floor(rng() * currentIndex);
     currentIndex--;
 
     // And swap it with the current element.

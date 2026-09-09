@@ -4,8 +4,12 @@ import options from './options';
 import type { ColorTheme } from './types/ColorTheme';
 import type { VectorLike } from './types/VectorLike';
 import { transformGuard } from './utils/transformGuard';
+import { createSlotRng, type Rng } from './utils/rng';
 import { rad } from './utils/utils';
 import { Vector } from './utils/Vector';
+
+/** Keeps the skill stream from colliding with other per-slot streams. */
+const SKILL_STREAM_SALT = 0x51c11100;
 
 export class Marble {
   type = 'marble' as const;
@@ -26,6 +30,7 @@ export class Marble {
   private theme: ColorTheme = Themes.dark;
 
   private physics: IPhysics;
+  private _skillRng: Rng;
 
   id: number;
 
@@ -53,13 +58,16 @@ export class Marble {
     return this.position.angle;
   }
 
-  constructor(physics: IPhysics, order: number, max: number, name?: string, weight: number = 1) {
+  constructor(physics: IPhysics, order: number, max: number, name?: string, weight: number = 1, seed: number = 0) {
     this.name = name || `M${order}`;
     this.weight = weight;
     this.physics = physics;
 
+    // Both draws are keyed by spawn slot (order), never by creation order, so
+    // that swapping which name lands on this slot leaves the physics identical.
+    this._skillRng = createSlotRng(seed ^ SKILL_STREAM_SALT, order);
     this._maxCoolTime = 1000 + (1 - this.weight) * 4000;
-    this._coolTime = this._maxCoolTime * Math.random();
+    this._coolTime = this._maxCoolTime * this._skillRng();
     this._skillRate = 0.2 * this.weight;
 
     const maxLine = Math.ceil(max / 10);
@@ -101,7 +109,7 @@ export class Marble {
     }
 
     if (this._coolTime <= 0) {
-      this.skill = Math.random() < this._skillRate ? Skills.Impact : Skills.None;
+      this.skill = this._skillRng() < this._skillRate ? Skills.Impact : Skills.None;
       this._coolTime = this._maxCoolTime;
     }
   }

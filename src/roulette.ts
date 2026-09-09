@@ -1,14 +1,16 @@
 import { Camera } from './camera';
-import { canvasHeight, canvasWidth, initialZoom, Skills, Themes, zoomThreshold } from './data/constants';
+import { canvasHeight, canvasWidth, initialZoom, Themes, zoomThreshold } from './data/constants';
 import { type StageDef, stages } from './data/maps';
 import { FastForwader } from './fastForwader';
 import type { GameObject } from './gameObject';
 import type { IPhysics } from './IPhysics';
+import { expandNames, type MarbleEntry } from './marbleEntries';
 import { Marble } from './marble';
 import { Minimap } from './minimap';
 import options from './options';
 import { ParticleManager } from './particleManager';
 import { Box2dPhysics } from './physics-box2d';
+import { RaceCore, UPDATE_INTERVAL } from './raceCore';
 import { RankRenderer } from './rankRenderer';
 import { RouletteRenderer } from './rouletteRenderer';
 import { SkillEffect } from './skillEffect';
@@ -16,20 +18,16 @@ import type { ColorTheme } from './types/ColorTheme';
 import type { MouseEventHandlerName, MouseEventName } from './types/mouseEvents.type';
 import type { UIObject } from './UIObject';
 import { bound } from './utils/bound.decorator';
-import { parseName, shuffle } from './utils/utils';
+import { createRng, randomSeed } from './utils/rng';
+import { shuffle } from './utils/utils';
 import { VideoRecorder } from './utils/videoRecorder';
 
 export class Roulette extends EventTarget {
-  private _marbles: Marble[] = [];
-
   private _lastTime: number = 0;
   private _elapsed: number = 0;
 
-  private _updateInterval = 10;
-  private _timeScale = 1;
   private _speed = 1;
 
-  private _winners: Marble[] = [];
   private _particleManager = new ParticleManager();
   private _stage: StageDef | null = null;
 
@@ -39,9 +37,6 @@ export class Roulette extends EventTarget {
   private _effects: GameObject[] = [];
 
   private _winnerRank = 0;
-  private _totalMarbleCount = 0;
-  private _goalDist: number = Infinity;
-  private _isRunning: boolean = false;
   private _winner: Marble | null = null;
 
   private _uiObjects: UIObject[] = [];
@@ -50,18 +45,29 @@ export class Roulette extends EventTarget {
   private _recorder!: VideoRecorder;
 
   private physics!: IPhysics;
+  private _core!: RaceCore;
 
   private _isReady: boolean = false;
-  private _allFinishedFired: boolean = false;
+  private _seed: number = 0;
 
-  private _conflictPairs: [string, string][] = [];
-  private _groupSize: number = 3;
-  private _lastNudgeTime: number = 0;
   protected fastForwarder!: FastForwader;
   protected _theme: ColorTheme = Themes.dark;
 
   get isReady() {
     return this._isReady;
+  }
+
+  /** The seed the current line-up was built with; a race replays from it. */
+  get seed() {
+    return this._seed;
+  }
+
+  private get _marbles(): Marble[] {
+    return this._core ? this._core.marbles : [];
+  }
+
+  private get _winners(): Marble[] {
+    return this._core ? this._core.winners : [];
   }
 
   protected createRenderer(): RouletteRenderer {
@@ -111,138 +117,25 @@ export class Roulette extends EventTarget {
     }
     this._lastTime = currentTime;
 
-    const interval = (this._updateInterval / 1000) * this._timeScale;
-
-    while (this._elapsed >= this._updateInterval) {
-      this.physics.step(interval);
-      this._updateMarbles(this._updateInterval);
-      this._particleManager.update(this._updateInterval);
-      this._updateEffects(this._updateInterval);
-      this._elapsed -= this._updateInterval;
-      this._uiObjects.forEach((obj) => obj.update(this._updateInterval));
-    }
-
-    if (this._marbles.length > 1) {
-      this._marbles.sort((a, b) => b.y - a.y);
+    while (this._elapsed >= UPDATE_INTERVAL) {
+      this._core.step();
+      this._particleManager.update(UPDATE_INTERVAL);
+      this._updateEffects(UPDATE_INTERVAL);
+      this._elapsed -= UPDATE_INTERVAL;
+      this._uiObjects.forEach((obj) => obj.update(UPDATE_INTERVAL));
     }
 
     if (this._stage) {
       this._camera.update({
         marbles: this._marbles,
         stage: this._stage,
-        needToZoom: this._goalDist < zoomThreshold,
+        needToZoom: this._core.goalDist < zoomThreshold,
         targetIndex: this._winners.length > 0 ? this._winnerRank - this._winners.length : 0,
       });
     }
 
     this._render();
     window.requestAnimationFrame(this._update);
-  }
-
-  private _updateMarbles(deltaTime: number) {
-    if (!this._stage) return;
-
-    for (let i = 0; i < this._marbles.length; i++) {
-      const marble = this._marbles[i];
-      marble.update(deltaTime);
-      if (marble.skill === Skills.Impact) {
-        this._effects.push(new SkillEffect(marble.x, marble.y));
-        this.physics.impact(marble.id);
-      }
-      if (marble.y > this._stage.goalY) {
-        this._winners.push(marble);
-        if (this._isRunning && this._winners.length === this._winnerRank + 1) {
-          this.dispatchEvent(new CustomEvent('goal', { detail: { winner: marble.name } }));
-          this._winner = marble;
-          this._isRunning = false;
-          this._particleManager.shot(this._renderer.width, this._renderer.height);
-          setTimeout(() => {
-            this._recorder.stop();
-          }, 1000);
-        } else if (
-          this._isRunning &&
-          this._winnerRank === this._winners.length &&
-          this._winnerRank === this._totalMarbleCount - 1
-        ) {
-          this.dispatchEvent(
-            new CustomEvent('goal', {
-              detail: { winner: this._marbles[i + 1].name },
-            })
-          );
-          this._winner = this._marbles[i + 1];
-          this._isRunning = false;
-          this._particleManager.shot(this._renderer.width, this._renderer.height);
-          setTimeout(() => {
-            this._recorder.stop();
-          }, 1000);
-        }
-        setTimeout(() => {
-          this.physics.removeMarble(marble.id);
-        }, 500);
-
-        if (!this._allFinishedFired && this._winners.length >= this._totalMarbleCount) {
-          this._allFinishedFired = true;
-          this.dispatchEvent(
-            new CustomEvent('allFinished', { detail: { winners: this._winners.map((m) => m.name) } })
-          );
-        }
-      }
-    }
-
-    const now = Date.now();
-    if (this._conflictPairs.length > 0 && now - this._lastNudgeTime > 250) {
-      this._lastNudgeTime = now;
-      this._nudgeConflicts();
-    }
-
-    const targetIndex = this._winnerRank - this._winners.length;
-    const topY = this._marbles[targetIndex] ? this._marbles[targetIndex].y : 0;
-    this._goalDist = Math.abs(this._stage.zoomY - topY);
-    this._timeScale = this._calcTimeScale();
-
-    this._marbles = this._marbles.filter((marble) => marble.y <= this._stage?.goalY);
-  }
-
-  private _nudgeConflicts() {
-    if (!this._stage || this._marbles.length < 2) return;
-
-    // 활성 구슬을 goal에 가까운 순으로 정렬 (Y가 클수록 goal에 가까움)
-    const sorted = [...this._marbles].sort((a, b) => b.y - a.y);
-
-    for (const [nameA, nameB] of this._conflictPairs) {
-      const idxA = sorted.findIndex((m) => m.name === nameA);
-      const idxB = sorted.findIndex((m) => m.name === nameB);
-      if (idxA < 0 || idxB < 0) continue;
-
-      const projA = Math.floor((this._winners.length + idxA) / this._groupSize);
-      const projB = Math.floor((this._winners.length + idxB) / this._groupSize);
-      if (projA !== projB) continue;
-
-      // 같은 조로 향하고 있음 → 앞선 구슬(leader)을 살짝 감속
-      const leaderIdx = idxA < idxB ? idxA : idxB;
-      const leader = sorted[leaderIdx];
-
-      // leader가 이미 goal 근처에 있어야 의미 있음
-      const nearGoalThreshold = this._stage.zoomY - 20;
-      if (leader.y < nearGoalThreshold) continue;
-
-      // 위로 impulse (감속) — 값이 클수록 확실히 분리되지만 부자연스러울 수 있음
-      this.physics.applyImpulse(leader.id, 0, -1.2);
-    }
-  }
-
-  private _calcTimeScale(): number {
-    if (!this._stage) return 1;
-    const targetIndex = this._winnerRank - this._winners.length;
-    if (this._winners.length < this._winnerRank + 1 && this._goalDist < zoomThreshold) {
-      if (
-        this._marbles[targetIndex].y > this._stage.zoomY - zoomThreshold * 1.2 &&
-        (this._marbles[targetIndex - 1] || this._marbles[targetIndex + 1])
-      ) {
-        return Math.max(0.2, this._goalDist / zoomThreshold);
-      }
-    }
-    return 1;
   }
 
   private _updateEffects(deltaTime: number) {
@@ -274,6 +167,25 @@ export class Roulette extends EventTarget {
     this.physics = new Box2dPhysics();
     await this.physics.init();
 
+    this._core = new RaceCore(this.physics, {
+      onSkill: (marble) => {
+        this._effects.push(new SkillEffect(marble.x, marble.y));
+      },
+      onWinner: (marble) => {
+        this.dispatchEvent(new CustomEvent('goal', { detail: { winner: marble.name } }));
+        this._winner = marble;
+        this._particleManager.shot(this._renderer.width, this._renderer.height);
+        setTimeout(() => {
+          this._recorder.stop();
+        }, 1000);
+      },
+      onAllFinished: (winners) => {
+        this.dispatchEvent(
+          new CustomEvent('allFinished', { detail: { winners: winners.map((m) => m.name) } })
+        );
+      },
+    });
+
     this.addUiObject(new RankRenderer());
     this.attachEvent();
     const minimap = new Minimap();
@@ -289,6 +201,7 @@ export class Roulette extends EventTarget {
     this.fastForwarder = this.createFastForwader();
     this.addUiObject(this.fastForwarder);
     this._stage = stages[0];
+    this._core.stage = this._stage;
     this._loadMap();
   }
 
@@ -352,39 +265,28 @@ export class Roulette extends EventTarget {
   public clearMarbles() {
     this.physics.clearMarbles();
     this._winner = null;
-    this._winners = [];
-    this._marbles = [];
-    this._allFinishedFired = false;
+    this._core.reset();
+    this._core.stage = this._stage;
   }
 
   public getWinners(): string[] {
     return this._winners.map((m) => m.name);
   }
 
-  public setConflictPairs(pairs: [string, string][]) {
-    this._conflictPairs = pairs;
-  }
-
-  public setGroupSize(size: number) {
-    this._groupSize = size;
-  }
-
   public start() {
-    this._isRunning = true;
     this._winnerRank = options.winningRank;
     if (this._winnerRank >= this._marbles.length) {
       this._winnerRank = this._marbles.length - 1;
     }
+    this._core.winnerRank = this._winnerRank;
     this._camera.startFollowingMarbles();
 
     if (this._autoRecording) {
       this._recorder.start().then(() => {
-        this.physics.start();
-        this._marbles.forEach((marble) => (marble.isActive = true));
+        this._core.start();
       });
     } else {
-      this.physics.start();
-      this._marbles.forEach((marble) => (marble.isActive = true));
+      this._core.start();
     }
   }
 
@@ -405,87 +307,87 @@ export class Roulette extends EventTarget {
 
   public setWinningRank(rank: number) {
     this._winnerRank = rank;
+    if (this._core) this._core.winnerRank = rank;
   }
 
   public setAutoRecording(value: boolean) {
     this._autoRecording = value;
   }
 
+  /** Random line-up: every name lands on a random spawn slot. */
   public setMarbles(names: string[]) {
-    this.reset();
-    const arr = names.slice();
-
-    let maxWeight = -Infinity;
-    let minWeight = Infinity;
-
-    const members = arr
-      .map((nameString) => {
-        const result = parseName(nameString);
-        if (!result) return null;
-        const { name, weight, count } = result;
-        if (weight > maxWeight) maxWeight = weight;
-        if (weight < minWeight) minWeight = weight;
-        return { name, weight, count };
-      })
-      .filter((member) => !!member);
-
-    const gap = maxWeight - minWeight;
-
-    let totalCount = 0;
-    members.forEach((member) => {
-      if (member) {
-        member.weight = 0.1 + (gap ? (member.weight - minWeight) / gap : 0);
-        totalCount += member.count;
-      }
-    });
-
-    const orders = shuffle(
-      Array(totalCount)
-        .fill(0)
-        .map((_, i) => i)
+    const entries = expandNames(names);
+    const seed = randomSeed();
+    const slots = shuffle(
+      entries.map((_, i) => i),
+      createRng(seed)
     );
-    members.forEach((member) => {
-      if (member) {
-        for (let j = 0; j < member.count; j++) {
-          const order = orders.pop() || 0;
-          this._marbles.push(new Marble(this.physics, order, totalCount, member.name, member.weight));
-        }
-      }
+    this.setMarbleEntries(entries, slots, seed);
+  }
+
+  /**
+   * Chosen line-up: `slotOf[i]` is the spawn slot for `entries[i]`.
+   *
+   * The physics depends only on the seed and the slot, never on the name, so a
+   * caller that knows which slots finish in which group can decide the grouping
+   * without touching the race itself.
+   */
+  public setMarbleEntries(entries: MarbleEntry[], slotOf: number[], seed: number) {
+    this.reset();
+
+    const total = entries.length;
+    this._seed = seed;
+    this.physics.setSeed(seed);
+
+    const bySlot: (MarbleEntry | undefined)[] = new Array(total);
+    entries.forEach((entry, i) => {
+      bySlot[slotOf[i]] = entry;
     });
-    this._totalMarbleCount = totalCount;
 
-    // 카메라를 구슬 생성 위치 중앙으로 이동 + 줌인
-    if (totalCount > 0) {
-      const cols = Math.min(totalCount, 10);
-      const rows = Math.ceil(totalCount / 10);
-      const lineDelta = -Math.max(0, Math.ceil(rows - 5));
-      const centerX = 10.25 + (cols - 1) * 0.3;
-      const centerY = (1 + rows) / 2 + lineDelta;
-
-      const spawnWidth = Math.max((cols - 1) * 0.6, 1);
-      const spawnHeight = Math.max(rows - 1, 1);
-      const margin = 3;
-      const viewW = canvasWidth / initialZoom;
-      const viewH = canvasHeight / initialZoom;
-      const zoom = Math.max(
-        1.5,
-        Math.min(Math.min(viewW / (spawnWidth + margin * 2), viewH / (spawnHeight + margin * 2)), 3)
-      );
-
-      this._camera.initializePosition({ x: centerX, y: centerY }, zoom);
+    // Created in ascending slot order so Box2D always builds its body list in
+    // the same sequence; the solver order would otherwise perturb the result.
+    for (let slot = 0; slot < total; slot++) {
+      const entry = bySlot[slot];
+      if (!entry) continue;
+      this._core.marbles.push(new Marble(this.physics, slot, total, entry.name, entry.weight, seed));
     }
+    this._core.totalMarbleCount = total;
+
+    this._frameSpawnArea(total);
+  }
+
+  /** Moves the camera to the spawn grid and zooms in on it. */
+  private _frameSpawnArea(totalCount: number) {
+    if (totalCount <= 0) return;
+
+    const cols = Math.min(totalCount, 10);
+    const rows = Math.ceil(totalCount / 10);
+    const lineDelta = -Math.max(0, Math.ceil(rows - 5));
+    const centerX = 10.25 + (cols - 1) * 0.3;
+    const centerY = (1 + rows) / 2 + lineDelta;
+
+    const spawnWidth = Math.max((cols - 1) * 0.6, 1);
+    const spawnHeight = Math.max(rows - 1, 1);
+    const margin = 3;
+    const viewW = canvasWidth / initialZoom;
+    const viewH = canvasHeight / initialZoom;
+    const zoom = Math.max(
+      1.5,
+      Math.min(Math.min(viewW / (spawnWidth + margin * 2), viewH / (spawnHeight + margin * 2)), 3)
+    );
+
+    this._camera.initializePosition({ x: centerX, y: centerY }, zoom);
   }
 
   private _clearMap() {
     this.physics.clear();
-    this._marbles = [];
+    this._core.marbles = [];
   }
 
   public reset() {
     this.clearMarbles();
     this._clearMap();
     this._loadMap();
-    this._goalDist = Infinity;
   }
 
   public getCount() {
@@ -501,12 +403,17 @@ export class Roulette extends EventTarget {
     });
   }
 
+  public getStage(): StageDef | null {
+    return this._stage;
+  }
+
   public setMap(index: number) {
     if (index < 0 || index > stages.length - 1) {
       throw new Error('Incorrect map number');
     }
     const names = this._marbles.map((marble) => marble.name);
     this._stage = stages[index];
+    this._core.stage = this._stage;
     this.setMarbles(names);
     this._camera.initializePosition();
   }
