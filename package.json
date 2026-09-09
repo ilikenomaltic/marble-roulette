@@ -1,0 +1,26 @@
+{
+  "name": "marble-roulette",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A lucky draw by dropping marbles, made by lazygyu (fork with group-assignment + conflict-pair features)",
+  "source": "index.html",
+  "scripts": {
+    "start": "parcel index.html",
+    "build": "parcel build index.html --public-url ./"
+  },
+  "browserslist": [
+    "last 2 Chrome versions"
+  ],
+  "dependencies": {
+    "box2d-wasm": "^7.0.0",
+    "tslib": "^2.6.0"
+  },
+  "devDependencies": {
+    "@parcel/packager-raw-url": "^2.16.4",
+    "@parcel/transformer-sass": "^2.12.0",
+    "@parcel/transformer-webmanifest": "^2.16.4",
+    "parcel": "^2.12.0",
+    "sass": "^1.77.0",
+    "typescript": "^5.4.0"
+  }
+}
